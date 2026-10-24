@@ -46,6 +46,9 @@ void RRTStar::clear() {
   best_goal_ = kNoParent;
   total_iterations_ = 0;
   first_solution_iteration_ = 0;
+  first_solution_time_s_ = 0.0;
+  total_time_s_ = 0.0;
+  history_.clear();
   rng_.seed(config_.seed);
   nn_.reset();
   if (!problem_valid_) return;
@@ -87,24 +90,38 @@ PlannerResult RRTStar::solve(const Termination& term) {
     return std::chrono::duration<double>(Clock::now() - t0).count();
   };
 
+  if (history_.empty()) record(0.0);
+
   std::size_t iters = 0;
   while (true) {
     if (term.max_iterations > 0 && iters >= term.max_iterations) break;
     if (term.time_limit_s > 0.0 && elapsed() >= term.time_limit_s) break;
     if (term.stop_on_first_solution && best_goal_ != kNoParent) break;
+    const double cost_before = bestCost();
     iterate();
     ++iters;
     ++total_iterations_;
-    if (best_goal_ != kNoParent && first_solution_iteration_ == 0) {
-      first_solution_iteration_ = total_iterations_;
+    const bool improved = bestCost() < cost_before;
+    const bool periodic = config_.progress_interval > 0 &&
+                          total_iterations_ % config_.progress_interval == 0;
+    if (improved || periodic) {
+      const double now = total_time_s_ + elapsed();
+      if (improved && first_solution_iteration_ == 0) {
+        first_solution_iteration_ = total_iterations_;
+        first_solution_time_s_ = now;
+      }
+      record(now);
     }
   }
+  const double call_time = elapsed();
+  total_time_s_ += call_time;
+  record(total_time_s_);
 
   PlannerResult result = buildResult(best_goal_ != kNoParent
                                          ? PlannerStatus::kSolved
                                          : PlannerStatus::kNoSolution);
   result.iterations = iters;
-  result.elapsed_s = elapsed();
+  result.elapsed_s = call_time;
   return result;
 }
 
@@ -141,11 +158,16 @@ void RRTStar::iterate() {
     std::size_t id;
     LocalPathPtr edge;
   };
+  // One neighbourhood query serves both choose-parent and rewire. It may
+  // over-approximate; the exact radius test is on the steering paths we
+  // build anyway (StateSpace guarantees distance == connect()->length()).
+  const std::vector<std::size_t> near = nn_->candidates(x_new, r);
+
   std::vector<Candidate> candidates;
-  for (std::size_t id : nn_->nearTo(x_new, r)) {
+  for (std::size_t id : near) {
     if (id == x_nearest) continue;
     LocalPathPtr edge = space.connect(nodes_[id].state, x_new);
-    if (!edge) continue;
+    if (!edge || edge->length() > r) continue;
     const double ec = cost.motionCost(*edge);
     const double total = cost.combine(nodes_[id].cost, ec);
     if (total < best_cost) candidates.push_back({total, ec, id, std::move(edge)});
@@ -171,10 +193,10 @@ void RRTStar::iterate() {
   const State& new_state = nodes_[new_id].state;
 
   // 4. Rewire: route neighbours through x_new where that is cheaper.
-  for (std::size_t id : nn_->nearFrom(new_state, r)) {
-    if (id == new_id || id == best_parent) continue;
+  for (std::size_t id : near) {
+    if (id == best_parent) continue;
     LocalPathPtr edge = space.connect(new_state, nodes_[id].state);
-    if (!edge) continue;
+    if (!edge || edge->length() > r) continue;
     const double ec = cost.motionCost(*edge);
     const double total = cost.combine(nodes_[new_id].cost, ec);
     if (total + kCostEpsilon < nodes_[id].cost &&
@@ -218,6 +240,20 @@ void RRTStar::reparent(std::size_t node, std::size_t new_parent,
   }
 }
 
+double RRTStar::bestCost() const {
+  return best_goal_ == kNoParent ? std::numeric_limits<double>::infinity()
+                                 : nodes_[best_goal_].cost;
+}
+
+void RRTStar::record(double time_s) {
+  // Collapse samples that carry no new information (same iteration).
+  if (!history_.empty() && history_.back().iteration == total_iterations_) {
+    history_.back() = {time_s, total_iterations_, nodes_.size(), bestCost()};
+    return;
+  }
+  history_.push_back({time_s, total_iterations_, nodes_.size(), bestCost()});
+}
+
 void RRTStar::updateBestGoal() {
   double best = std::numeric_limits<double>::infinity();
   for (std::size_t id : goal_nodes_) {
@@ -233,6 +269,10 @@ PlannerResult RRTStar::buildResult(PlannerStatus status) const {
   result.status = status;
   result.tree_size = nodes_.size();
   result.first_solution_iteration = first_solution_iteration_;
+  result.convergence = history_;
+  if (first_solution_iteration_ > 0) {
+    result.first_solution_time_s = first_solution_time_s_;
+  }
   if (status != PlannerStatus::kSolved) return result;
 
   for (std::size_t id = best_goal_; id != kNoParent; id = nodes_[id].parent) {

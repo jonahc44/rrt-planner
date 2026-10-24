@@ -15,6 +15,15 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTwoPi = 2.0 * kPi;
 
+inline double wrap2pi(double a) {
+  // Common case first: already in range (much cheaper than fmod/floor).
+  if (a >= 0.0 && a < kTwoPi) return a;
+  double r = a - kTwoPi * std::floor(a / kTwoPi);
+  // Rounding can land exactly on 2*pi (or a hair below 0).
+  if (r >= kTwoPi || r < 0.0) r = 0.0;
+  return r;
+}
+
 struct Normalised {
   double d, alpha, beta;
   double sa, sb, ca, cb, c_ab;
@@ -27,8 +36,8 @@ Normalised normalise(const Pose& from, const Pose& to, double rho) {
   const double phi = D > 0.0 ? std::atan2(dy, dx) : 0.0;
   Normalised n{};
   n.d = D / rho;
-  n.alpha = mod2pi(from.theta - phi);
-  n.beta = mod2pi(to.theta - phi);
+  n.alpha = wrap2pi(from.theta - phi);
+  n.beta = wrap2pi(to.theta - phi);
   n.sa = std::sin(n.alpha);
   n.sb = std::sin(n.beta);
   n.ca = std::cos(n.alpha);
@@ -44,7 +53,7 @@ std::optional<Params> lsl(const Normalised& n) {
   const double p_sq = 2.0 + n.d * n.d - 2.0 * n.c_ab + 2.0 * n.d * (n.sa - n.sb);
   if (p_sq < 0.0) return std::nullopt;
   const double tmp1 = std::atan2(n.cb - n.ca, tmp0);
-  return Params{mod2pi(tmp1 - n.alpha), std::sqrt(p_sq), mod2pi(n.beta - tmp1)};
+  return Params{wrap2pi(tmp1 - n.alpha), std::sqrt(p_sq), wrap2pi(n.beta - tmp1)};
 }
 
 std::optional<Params> rsr(const Normalised& n) {
@@ -52,7 +61,7 @@ std::optional<Params> rsr(const Normalised& n) {
   const double p_sq = 2.0 + n.d * n.d - 2.0 * n.c_ab + 2.0 * n.d * (n.sb - n.sa);
   if (p_sq < 0.0) return std::nullopt;
   const double tmp1 = std::atan2(n.ca - n.cb, tmp0);
-  return Params{mod2pi(n.alpha - tmp1), std::sqrt(p_sq), mod2pi(tmp1 - n.beta)};
+  return Params{wrap2pi(n.alpha - tmp1), std::sqrt(p_sq), wrap2pi(tmp1 - n.beta)};
 }
 
 std::optional<Params> lsr(const Normalised& n) {
@@ -62,7 +71,7 @@ std::optional<Params> lsr(const Normalised& n) {
   const double p = std::sqrt(p_sq);
   const double tmp =
       std::atan2(-n.ca - n.cb, n.d + n.sa + n.sb) - std::atan2(-2.0, p);
-  return Params{mod2pi(tmp - n.alpha), p, mod2pi(tmp - n.beta)};
+  return Params{wrap2pi(tmp - n.alpha), p, wrap2pi(tmp - n.beta)};
 }
 
 std::optional<Params> rsl(const Normalised& n) {
@@ -72,7 +81,7 @@ std::optional<Params> rsl(const Normalised& n) {
   const double p = std::sqrt(p_sq);
   const double tmp =
       std::atan2(n.ca + n.cb, n.d - n.sa - n.sb) - std::atan2(2.0, p);
-  return Params{mod2pi(n.alpha - tmp), p, mod2pi(n.beta - tmp)};
+  return Params{wrap2pi(n.alpha - tmp), p, wrap2pi(n.beta - tmp)};
 }
 
 std::optional<Params> rlr(const Normalised& n) {
@@ -80,9 +89,9 @@ std::optional<Params> rlr(const Normalised& n) {
       (6.0 - n.d * n.d + 2.0 * n.c_ab + 2.0 * n.d * (n.sa - n.sb)) / 8.0;
   if (std::abs(tmp) > 1.0) return std::nullopt;
   const double phi = std::atan2(n.ca - n.cb, n.d - n.sa + n.sb);
-  const double p = mod2pi(kTwoPi - std::acos(tmp));
-  const double t = mod2pi(n.alpha - phi + mod2pi(p / 2.0));
-  return Params{t, p, mod2pi(n.alpha - n.beta - t + mod2pi(p))};
+  const double p = wrap2pi(kTwoPi - std::acos(tmp));
+  const double t = wrap2pi(n.alpha - phi + wrap2pi(p / 2.0));
+  return Params{t, p, wrap2pi(n.alpha - n.beta - t + wrap2pi(p))};
 }
 
 std::optional<Params> lrl(const Normalised& n) {
@@ -90,9 +99,9 @@ std::optional<Params> lrl(const Normalised& n) {
       (6.0 - n.d * n.d + 2.0 * n.c_ab + 2.0 * n.d * (n.sb - n.sa)) / 8.0;
   if (std::abs(tmp) > 1.0) return std::nullopt;
   const double phi = std::atan2(n.ca - n.cb, n.d + n.sa - n.sb);
-  const double p = mod2pi(kTwoPi - std::acos(tmp));
-  const double t = mod2pi(-n.alpha - phi + p / 2.0);
-  return Params{t, p, mod2pi(mod2pi(n.beta) - n.alpha - t + mod2pi(p))};
+  const double p = wrap2pi(kTwoPi - std::acos(tmp));
+  const double t = wrap2pi(-n.alpha - phi + p / 2.0);
+  return Params{t, p, wrap2pi(wrap2pi(n.beta) - n.alpha - t + wrap2pi(p))};
 }
 
 /// Advance a unit-radius pose along one segment of normalised length t.
@@ -113,12 +122,7 @@ Pose advance(const Pose& p, Segment seg, double t) {
 
 }  // namespace
 
-double mod2pi(double a) {
-  double r = std::fmod(a, kTwoPi);
-  if (r < 0.0) r += kTwoPi;
-  // fmod can return exactly 2*pi after the correction due to rounding.
-  return r >= kTwoPi ? 0.0 : r;
-}
+double mod2pi(double a) { return wrap2pi(a); }
 
 double wrapToPi(double a) { return mod2pi(a + kPi) - kPi; }
 
@@ -147,18 +151,25 @@ const char* toString(Word w) {
   return "?";
 }
 
+namespace {
+
+std::optional<Params> solveNormalised(const Normalised& n, Word w) {
+  switch (w) {
+    case Word::kLSL: return lsl(n);
+    case Word::kLSR: return lsr(n);
+    case Word::kRSL: return rsl(n);
+    case Word::kRSR: return rsr(n);
+    case Word::kRLR: return rlr(n);
+    case Word::kLRL: return lrl(n);
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
 std::optional<Path> solveWord(const Pose& from, const Pose& to, double rho,
                               Word w) {
-  const Normalised n = normalise(from, to, rho);
-  std::optional<Params> params;
-  switch (w) {
-    case Word::kLSL: params = lsl(n); break;
-    case Word::kLSR: params = lsr(n); break;
-    case Word::kRSL: params = rsl(n); break;
-    case Word::kRSR: params = rsr(n); break;
-    case Word::kRLR: params = rlr(n); break;
-    case Word::kLRL: params = lrl(n); break;
-  }
+  const auto params = solveNormalised(normalise(from, to, rho), w);
   if (!params) return std::nullopt;
   Path path;
   path.start = from;
@@ -171,12 +182,20 @@ std::optional<Path> solveWord(const Pose& from, const Pose& to, double rho,
 Path shortestPath(const Pose& from, const Pose& to, double rho) {
   constexpr Word kWords[] = {Word::kLSL, Word::kLSR, Word::kRSL,
                              Word::kRSR, Word::kRLR, Word::kLRL};
+  // Normalise once; this is the planner's hot path (every distance() call).
+  const Normalised n = normalise(from, to, rho);
   Path best;
+  best.start = from;
+  best.rho = rho;
   double best_len = std::numeric_limits<double>::infinity();
   for (Word w : kWords) {
-    if (auto p = solveWord(from, to, rho, w); p && p->length() < best_len) {
-      best_len = p->length();
-      best = *p;
+    const auto p = solveNormalised(n, w);
+    if (!p) continue;
+    const double len = (*p)[0] + (*p)[1] + (*p)[2];
+    if (len < best_len) {
+      best_len = len;
+      best.word = w;
+      best.params = *p;
     }
   }
   return best;

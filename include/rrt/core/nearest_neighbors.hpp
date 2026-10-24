@@ -30,6 +30,13 @@ class NearestNeighbors {
   /// All ids i with distance(query, state_i) <= r  ("reachable from query").
   virtual std::vector<std::size_t> nearFrom(const State& query,
                                             double r) const = 0;
+
+  /// A superset of nearTo(query, r) and nearFrom(query, r), found without
+  /// evaluating the exact metric. Callers that compute steering paths to
+  /// each neighbour anyway can filter by path length themselves and skip a
+  /// redundant distance() per candidate. Default: the exact union.
+  virtual std::vector<std::size_t> candidates(const State& query,
+                                              double r) const;
 };
 
 /// Linear scan. Reference implementation for testing.
@@ -67,6 +74,9 @@ class KdTreeNearestNeighbors final : public NearestNeighbors {
   std::vector<std::size_t> nearTo(const State& query, double r) const override;
   std::vector<std::size_t> nearFrom(const State& query,
                                     double r) const override;
+  /// Ids whose embedding lies within r of the query's.
+  std::vector<std::size_t> candidates(const State& query,
+                                      double r) const override;
 
  private:
   /// Ids whose embedding lies within r (Euclidean) of the query's.

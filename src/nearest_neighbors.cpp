@@ -1,11 +1,25 @@
 #include "rrt/core/nearest_neighbors.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
 #include <nanoflann.hpp>
 
 namespace rrt {
+
+std::vector<std::size_t> NearestNeighbors::candidates(const State& query,
+                                                     double r) const {
+  std::vector<std::size_t> to = nearTo(query, r);
+  std::vector<std::size_t> from = nearFrom(query, r);
+  std::sort(to.begin(), to.end());
+  std::sort(from.begin(), from.end());
+  std::vector<std::size_t> out;
+  std::set_union(to.begin(), to.end(), from.begin(), from.end(),
+                 std::back_inserter(out));
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Brute force
@@ -134,33 +148,45 @@ std::vector<std::size_t> KdTreeNearestNeighbors::embeddedRadius(
   return ids;
 }
 
+std::vector<std::size_t> KdTreeNearestNeighbors::candidates(
+    const State& query, double r) const {
+  return embeddedRadius(query, r);
+}
+
 std::size_t KdTreeNearestNeighbors::nearest(const State& query) const {
   const auto& states = impl_->cloud.states;
   if (states.empty()) throw std::logic_error("nearest() on empty index");
-
-  // 1. Euclidean nearest neighbour in the embedding: a candidate.
   space_->embed(query, impl_->scratch.data());
-  std::size_t cand = 0;
-  double cand_sq = 0.0;
-  nanoflann::KNNResultSet<double, std::size_t> knn(1);
-  knn.init(&cand, &cand_sq);
-  impl_->tree->findNeighbors(knn, impl_->scratch.data());
 
-  // 2. Any state closer than the candidate under the true metric must lie
-  //    within that distance in the embedding (lower-bound property), so a
-  //    radius search around the query finds the exact answer.
-  const double cand_d = space_->distance(states[cand], query);
-  std::size_t best = cand;
-  double best_d = cand_d;
-  for (std::size_t id : embeddedRadius(query, cand_d)) {
-    if (id == cand) continue;
-    const double d = space_->distance(states[id], query);
-    if (d < best_d) {
-      best_d = d;
-      best = id;
+  // Visit points in increasing embedded distance (k-NN with doubling k) and
+  // stop once the embedded distance alone exceeds the best exact distance:
+  // by the lower-bound property no later point can beat it. For Euclidean
+  // spaces this ends after the first point; for Dubins after a handful.
+  std::size_t best = 0;
+  double best_d = std::numeric_limits<double>::infinity();
+  double seen_sq = -1.0;  // every point with embedded sq-dist < this is done
+  std::vector<std::size_t> ids;
+  std::vector<double> sq;
+  for (std::size_t k = std::min<std::size_t>(8, states.size());;
+       k = std::min(2 * k, states.size())) {
+    ids.resize(k);
+    sq.resize(k);
+    nanoflann::KNNResultSet<double, std::size_t> knn(k);
+    knn.init(ids.data(), sq.data());
+    impl_->tree->findNeighbors(knn, impl_->scratch.data());
+    const std::size_t found = knn.size();
+    for (std::size_t i = 0; i < found; ++i) {
+      if (sq[i] < seen_sq) continue;  // evaluated in a previous round
+      if (std::sqrt(sq[i]) * (1.0 - kRadiusSlack) >= best_d) return best;
+      const double d = space_->distance(states[ids[i]], query);
+      if (d < best_d) {
+        best_d = d;
+        best = ids[i];
+      }
     }
+    if (found < k || k == states.size()) return best;  // exhausted the index
+    seen_sq = sq[found - 1];
   }
-  return best;
 }
 
 std::vector<std::size_t> KdTreeNearestNeighbors::nearTo(const State& query,

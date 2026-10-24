@@ -31,6 +31,16 @@ struct Termination {
   bool stop_on_first_solution = false;
 };
 
+/// One point on the anytime convergence curve. Times and iteration counts
+/// are cumulative since the tree was last cleared.
+struct ConvergenceSample {
+  double time_s = 0.0;
+  std::size_t iteration = 0;
+  std::size_t tree_size = 0;
+  /// Best solution cost so far (infinity before the first solution).
+  double cost = std::numeric_limits<double>::infinity();
+};
+
 enum class PlannerStatus { kSolved, kNoSolution, kInvalidStart, kInvalidProblem };
 
 std::string toString(PlannerStatus status);
@@ -47,6 +57,13 @@ struct PlannerResult {
   double elapsed_s = 0.0;
   /// Iteration at which the first solution was found (0 if none).
   std::size_t first_solution_iteration = 0;
+  /// Cumulative planning time at which the first solution was found
+  /// (infinity if none).
+  double first_solution_time_s = std::numeric_limits<double>::infinity();
+  /// Cost history since the tree was last cleared. Holds a sample at every
+  /// improvement, plus periodic samples if the planner is configured to
+  /// record them.
+  std::vector<ConvergenceSample> convergence;
 
   bool solved() const { return status == PlannerStatus::kSolved; }
 

@@ -23,6 +23,9 @@ struct RRTStarConfig {
   /// connections are rarely feasible (e.g. Dubins, set ~ turning radius).
   double min_rewire_radius = 0.0;
   std::uint64_t seed = 42;
+  /// Also record a ConvergenceSample every this many iterations (0 = only
+  /// when the best cost improves). Useful for tracking tree growth.
+  std::size_t progress_interval = 0;
 };
 
 /// RRT* (Karaman & Frazzoli, 2011) written purely against the StateSpace /
@@ -64,6 +67,8 @@ class RRTStar final : public Planner {
   void reparent(std::size_t node, std::size_t new_parent, LocalPathPtr edge,
                 double edge_cost);
   void updateBestGoal();
+  double bestCost() const;
+  void record(double time_s);
   PlannerResult buildResult(PlannerStatus status) const;
 
   RRTStarConfig config_;
@@ -76,6 +81,9 @@ class RRTStar final : public Planner {
   double gamma_ = 0.0;
   std::size_t total_iterations_ = 0;
   std::size_t first_solution_iteration_ = 0;
+  double first_solution_time_s_ = 0.0;
+  double total_time_s_ = 0.0;
+  std::vector<ConvergenceSample> history_;
   bool problem_valid_ = false;
 };
 

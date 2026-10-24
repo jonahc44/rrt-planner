@@ -2,3 +2,7 @@ build/
 *.svg
 compile_commands.json
 .cache/
+python/rrt_planner/*.so
+__pycache__/
+*.egg-info/
+bench_results/

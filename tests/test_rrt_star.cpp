@@ -189,3 +189,25 @@ TEST(RRTStar, CostmapObjectivePlugsIn) {
   };
   EXPECT_LT(timeInBand(20.0), timeInBand(0.0));
 }
+
+TEST(RRTStar, ConvergenceHistoryIsMonotone) {
+  RRTStarConfig cfg;
+  cfg.progress_interval = 100;
+  RRTStar planner(cfg);
+  planner.setProblem(r2Problem(wallWorld(0.1)));
+  planner.solve({1500, 0.0, false});
+  const PlannerResult r = planner.solve({1500, 0.0, false});
+  ASSERT_TRUE(r.solved());
+  ASSERT_GE(r.convergence.size(), 30u);  // periodic samples across both calls
+  EXPECT_EQ(r.convergence.back().iteration, 3000u);
+  EXPECT_DOUBLE_EQ(r.convergence.back().cost, r.cost);
+  EXPECT_LE(r.first_solution_time_s, r.convergence.back().time_s);
+  for (std::size_t i = 1; i < r.convergence.size(); ++i) {
+    const auto& a = r.convergence[i - 1];
+    const auto& b = r.convergence[i];
+    EXPECT_GE(b.time_s, a.time_s);
+    EXPECT_GT(b.iteration, a.iteration);
+    EXPECT_GE(b.tree_size, a.tree_size);
+    EXPECT_LE(b.cost, a.cost);
+  }
+}

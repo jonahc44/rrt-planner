@@ -24,7 +24,8 @@ class StateSpace {
   /// Uniform random state inside the space's bounds.
   virtual State sampleUniform(Rng& rng) const = 0;
 
-  /// Length of the optimal steering path from `from` to `to`. May be
+  /// Length of the optimal steering path from `from` to `to`, i.e.
+  /// connect(from, to)->length() (infinity if no path exists). May be
   /// asymmetric (e.g. Dubins), so argument order matters.
   virtual double distance(const State& from, const State& to) const = 0;
 

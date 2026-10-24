@@ -12,6 +12,7 @@ endif()
 
 option(RRT_BUILD_TESTS "Build unit tests" ON)
 option(RRT_BUILD_EXAMPLES "Build example programs" ON)
+option(RRT_BUILD_PYTHON "Build the pybind11 Python module" OFF)
 
 include(FetchContent)
 
@@ -44,8 +45,32 @@ target_include_directories(rrt_planner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(rrt_planner PRIVATE nanoflann::nanoflann)
+# The Python extension links this static library into a shared object.
+set_target_properties(rrt_planner PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(rrt_planner PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic>)
+
+if(RRT_BUILD_PYTHON)
+  find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module)
+  # Ask the active interpreter where pybind11 lives (pip install pybind11).
+  if(NOT pybind11_DIR)
+    execute_process(
+      COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
+      OUTPUT_VARIABLE pybind11_DIR OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  endif()
+  find_package(pybind11 3.0 CONFIG REQUIRED)
+  pybind11_add_module(_core python/bindings.cpp)
+  target_link_libraries(_core PRIVATE rrt::planner)
+  if(SKBUILD)
+    install(TARGETS _core LIBRARY DESTINATION rrt_planner)
+  else()
+    # Developer build: drop the module next to the Python sources so
+    # `PYTHONPATH=python` picks it up without installing.
+    set_target_properties(_core PROPERTIES
+      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python/rrt_planner)
+  endif()
+endif()
 
 if(RRT_BUILD_EXAMPLES)
   foreach(ex plan_r2 plan_dubins)

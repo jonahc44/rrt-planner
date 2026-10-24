@@ -1,0 +1,30 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=3.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "rrt-planner"
+version = "0.1.0"
+description = "RRT* and Dubins kinodynamic RRT* with pluggable interfaces (C++ core, pybind11 bindings)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+bench = ["matplotlib>=3.7"]
+test = ["pytest>=7"]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["python/rrt_planner"]
+cmake.build-type = "Release"
+
+[tool.scikit-build.cmake.define]
+RRT_BUILD_PYTHON = "ON"
+RRT_BUILD_TESTS = "OFF"
+RRT_BUILD_EXAMPLES = "OFF"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+pythonpath = ["."]  # so `bench` is importable
