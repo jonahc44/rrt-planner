@@ -153,6 +153,10 @@ jobs:
 
       - name: Quality benchmark (quick suite, plots)
         if: always() && steps.measure.outcome == 'success'
+        # The module is built in-tree, not pip-installed. (bench.perf_ab sets
+        # PYTHONPATH for its own workers, which is why measurement worked.)
+        env:
+          PYTHONPATH: python
         run: python -m bench.run --quick --jobs 2 --out bench_results
 
       - name: Upload results
