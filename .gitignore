@@ -1,0 +1,4 @@
+build/
+*.svg
+compile_commands.json
+.cache/
