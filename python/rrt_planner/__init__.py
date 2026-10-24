@@ -8,6 +8,8 @@ from ._core import (
     ConvergenceSample,
     CostFunction,
     CostmapCost,
+    CountingCollisionChecker,
+    CountingStateSpace,
     DubinsLocalPath,
     DubinsStateSpace,
     GeometricWorld2D,

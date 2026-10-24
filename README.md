@@ -153,6 +153,7 @@ include/rrt/
     goal.hpp               Goal              isSatisfied / sample (+ GoalState)
     planner.hpp            Planner, PlanningProblem, Termination, PlannerResult
     nearest_neighbors.hpp  NearestNeighbors (KD-tree via nanoflann, brute force)
+    instrumentation.hpp    CountingStateSpace / CountingCollisionChecker (call counters)
   spaces/       RealVector2DSpace, DubinsStateSpace, dubins:: closed-form solver
   collision/    GeometricWorld2D (circles/boxes, disc robot), OccupancyGrid + GridCollisionChecker
   cost/         CostmapCost (∫ 1 + w·c(x,y) ds over a grid)
@@ -245,11 +246,100 @@ about 3× faster (2.5k → 7k iterations/s in the cluttered scenario):
 - **Dubins solver.** The frame is normalised once for all six words, and the
   angle wrap is inlined.
 
+The steering tests also found a **correctness bug in the Dubins solver**.
+Measuring the distance to a point partway along an optimal path often came out
+2πρ too long, as if the path included an extra full loop. This happened in
+about 56% of random cases. Three numerical problems caused it, all at
+degenerate geometry:
+- A turn that should be 0 came out as −1e-16 and wrapped to 2π.
+- With a zero-length straight segment, its direction is `atan2(0, 0)`, which
+  is just noise.
+- At tangencies, p² = −1e-15 marked the correct word as infeasible.
+
+Since RRT\* connects nodes to truncated-steer endpoints all the time, the bug
+distorted rewiring throughout the tree. After the fix, Dubins ρ=0.5 solves
+every benchmark scenario (it used to solve 80–100%) and finds its first
+solution 3–5× sooner.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and on every pull request.
+
+**`test`** (GCC and Clang): builds everything and runs the GoogleTest suite
+(`ctest`) and the Python suite (`pytest`).
+
+**`perf`** fails the build on a performance regression. It builds the head
+commit and the baseline (the PR's base, or the previous commit on `main`) on
+the same runner, and measures both with `bench.perf_ab`:
+
+- **Fixed work, fixed seeds.** Every case runs a fixed number of iterations
+  (`bench/perf.py`), so both builds of unchanged code do exactly the same
+  work.
+- **Interleaved per case.** One long-lived worker per build runs each case
+  back to back, alternating which goes first, for 5 rounds; the best time
+  wins. CPU frequency changes and noisy neighbours hit both sides equally.
+  Comparing whole suites run separately showed differences of nearly 2× for
+  identical code on a laptop.
+- **Pinned to one core** with `taskset`.
+
+`bench.perf_compare` then fails the job if any of these limits is exceeded:
+
+| signal | how it's measured | limit |
+|---|---|---|
+| time | total head time ÷ total base time, overall / per planner | ×1.10 / ×1.15 |
+| work | steering solves and collision-checked length per iteration, counted by `CountingStateSpace` / `CountingCollisionChecker`; deterministic, so noise-free | ×1.08 |
+| cost | final cost at the iteration budget, on cases both builds solve | ×1.03 |
+| success | share of cases solved | −15 points |
+
+The report goes to the job summary, and the JSON results plus a quick
+quality benchmark (with plots) are uploaded as artifacts. To accept a
+deliberate trade-off, add the **`perf-regression-ok`** label to the PR. The
+report still shows the regression, but the job passes.
+
+To check locally before pushing, build the baseline in a worktree and run the
+same comparison:
+
+```sh
+git worktree add ../base main
+cmake -S ../base -B ../base/build -DRRT_BUILD_PYTHON=ON -DPython_EXECUTABLE=$(which python) && cmake --build ../base/build
+cmake -S . -B build -DRRT_BUILD_PYTHON=ON -DPython_EXECUTABLE=$(which python) && cmake --build build
+python -m bench.perf_ab --base-path ../base/python --head-path python --out-dir perf
+python -m bench.perf_compare --base perf/base.json --head perf/head.json
+```
+
+I checked the gate by injecting regressions:
+- Extra arithmetic in `isStateValid` failed on time (R² ×1.22, work ×1.000).
+- Reverting the incremental nearest-neighbour search failed on both work
+  (Dubins ×1.43) and time.
+
 ## Tests
 
+- Steering (`test_steering.cpp`), checked for every bundled space:
+  - `connect()` is exact at both ends, and `distance()` equals its length.
+  - `steer()` truncates to the step and returns a prefix of the full path.
+  - Interpolation clamps outside the path, and zero-length paths work.
+  - `TruncatedPath` behaves correctly, and the default `steer()` passes
+    "no path" through.
+  - For Dubins: paths are parameterised by arc length, the heading stays
+    tangent to the path and wrapped to [−π, π), distance is asymmetric, it
+    scales with ρ, the triangle inequality holds, and every truncated steer
+    is itself optimal.
+- Collision (`test_collision.cpp`):
+  - Bounds, including the robot radius.
+  - Circles and boxes, with box corners rounded by the robot radius
+    (Minkowski sum).
+  - Motion checks catch obstacles mid-edge, at the start and at the end, and
+    paths leaving the map.
+  - Samples are never further apart than the resolution, without
+    oversampling, and the thin-obstacle trade-off is documented.
+  - Curved paths are checked along the curve, not the chord.
+  - `OccupancyGrid`: orientation, origin, resolution and cell-boundary
+    semantics.
+  - `GridCollisionChecker` thresholds, and agreement with the geometric
+    checker on rasterised boxes.
 - Dubins: every feasible word lands exactly on the target pose, the shortest
-  path is never shorter than the straight line, and the curvature bound holds
-  along sampled paths.
+  path is never shorter than the straight line, the curvature bound holds
+  along sampled paths, and there are no spurious full loops (regression test).
 - Nearest neighbours: the nanoflann KD-tree matches brute force exactly
   (nearest, `nearTo`, `nearFrom`) in R² and for Dubins.
 - RRT\*: converges to within 3% of the straight-line optimum in free space,
@@ -257,6 +347,9 @@ about 3× faster (2.5k → 7k iterations/s in the cluttered scenario):
   keeps tree invariants (costs, edge endpoints), never increases cost across
   `solve()` calls, produces collision-free and curvature-bounded Dubins paths,
   and works with a cost-map objective.
+- Perf tooling (`test_perf.py`): regression, noise, label-override and
+  missing-baseline handling in `perf_compare`; a head-vs-head A/B run has
+  identical work and cost.
 - Python (`pytest`): numpy outputs; Python-implemented space, checker, cost,
   goal and local path driving the C++ planner; object lifetimes after Python
   references are dropped; parallel `solve()` from threads; deterministic and

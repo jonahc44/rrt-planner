@@ -19,6 +19,7 @@
 #include "rrt/core/collision_checker.hpp"
 #include "rrt/core/cost_function.hpp"
 #include "rrt/core/goal.hpp"
+#include "rrt/core/instrumentation.hpp"
 #include "rrt/core/nearest_neighbors.hpp"
 #include "rrt/core/planner.hpp"
 #include "rrt/core/state_space.hpp"
@@ -432,6 +433,27 @@ PYBIND11_MODULE(_core, m) {
       .def(py::init<std::shared_ptr<const OccupancyGrid>, double, double>(),
            py::arg("grid"), py::arg("occupied_threshold") = 0.5,
            py::arg("resolution") = 0.05);
+
+  // ---- Instrumentation ----------------------------------------------------
+  py::classh<CountingStateSpace, StateSpace>(
+      m, "CountingStateSpace",
+      "Wraps a StateSpace and counts calls (thread-safe, relaxed atomics).")
+      .def(py::init<std::shared_ptr<const StateSpace>>(), py::arg("inner"))
+      .def_property_readonly("sample_calls", &CountingStateSpace::sampleCalls)
+      .def_property_readonly("distance_calls", &CountingStateSpace::distanceCalls)
+      .def_property_readonly("connect_calls", &CountingStateSpace::connectCalls)
+      .def_property_readonly("steer_calls", &CountingStateSpace::steerCalls)
+      .def("reset", &CountingStateSpace::reset);
+
+  py::classh<CountingCollisionChecker, CollisionChecker>(
+      m, "CountingCollisionChecker",
+      "Wraps a CollisionChecker and counts calls and checked arc length.")
+      .def(py::init<std::shared_ptr<const CollisionChecker>>(), py::arg("inner"))
+      .def_property_readonly("state_calls", &CountingCollisionChecker::stateCalls)
+      .def_property_readonly("motion_calls", &CountingCollisionChecker::motionCalls)
+      .def_property_readonly("checked_length",
+                             &CountingCollisionChecker::checkedLength)
+      .def("reset", &CountingCollisionChecker::reset);
 
   // ---- CostFunction -------------------------------------------------------
   py::classh<CostFunction, PyCostFunction>(m, "CostFunction")

@@ -106,3 +106,26 @@ TEST(DubinsStateSpace, SteerTruncatesAndEndsOnThePath) {
   const State e = part->end(), f = full->interpolate(1.0);
   for (int k = 0; k < 3; ++k) EXPECT_NEAR(e[k], f[k], 1e-9);
 }
+
+TEST(Dubins, NoSpuriousFullLoopsOnAlignedEndpoints) {
+  // Regression: a segment whose turn should be exactly zero came out as
+  // -1e-16 and wrapped to 2*pi, adding a full loop (2*pi*rho) to the
+  // length. It hit most connections to truncated-steer endpoints.
+  std::mt19937_64 rng(12);
+  const double rho = 0.8;
+  int checked = 0;
+  for (int i = 0; i < 2000; ++i) {
+    const Pose a = randomPose(rng, 8.0), b = randomPose(rng, 8.0);
+    const Path full = shortestPath(a, b, rho);
+    for (double s : {0.1, 0.5, 1.0, 0.5 * full.length()}) {
+      if (s > full.length()) continue;
+      const Pose mid = full.sample(s);
+      EXPECT_NEAR(shortestPath(a, mid, rho).length(), s, 1e-6);
+      ++checked;
+    }
+  }
+  EXPECT_GT(checked, 7000);
+  // The two textbook aligned cases.
+  EXPECT_NEAR(shortestPath({0, 0, 0}, {5, 0, 0}, rho).length(), 5.0, 1e-12);
+  EXPECT_NEAR(shortestPath({0, 0, kPi / 2}, {0, 5, kPi / 2}, rho).length(), 5.0, 1e-12);
+}

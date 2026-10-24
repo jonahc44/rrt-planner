@@ -91,9 +91,12 @@ if(RRT_BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
   endif()
   add_executable(rrt_tests
+    tests/test_collision.cpp
     tests/test_dubins.cpp
+    tests/test_instrumentation.cpp
     tests/test_nearest_neighbors.cpp
-    tests/test_rrt_star.cpp)
+    tests/test_rrt_star.cpp
+    tests/test_steering.cpp)
   target_link_libraries(rrt_tests PRIVATE rrt::planner GTest::gtest_main)
   include(GoogleTest)
   gtest_discover_tests(rrt_tests)

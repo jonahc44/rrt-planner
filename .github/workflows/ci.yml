@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # labeled/unlabeled so adding `perf-regression-ok` re-runs the gate.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  test:
+    name: Tests (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+          python -m pip install "pybind11>=3.0" numpy matplotlib pytest
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DRRT_BUILD_PYTHON=ON -DPython_EXECUTABLE="$(which python)"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: C++ tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Python tests
+        run: PYTHONPATH=python python -m pytest -v
+
+  perf:
+    name: Performance regression
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the baseline commit
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            sha="${{ github.event.pull_request.base.sha }}"
+          else
+            sha="${{ github.event.before }}"
+          fi
+          # New branches / manual runs have no "before": compare with the parent.
+          if [ -z "$sha" ] || [ "$sha" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+            sha="$(git rev-parse HEAD~1 2>/dev/null || true)"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Baseline: ${sha:-none}"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+          python -m pip install "pybind11>=3.0" numpy matplotlib
+
+      - name: Build head
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRRT_BUILD_PYTHON=ON \
+            -DRRT_BUILD_TESTS=OFF -DRRT_BUILD_EXAMPLES=OFF -DPython_EXECUTABLE="$(which python)"
+          cmake --build build
+
+      - name: Build baseline
+        id: build_base
+        if: steps.base.outputs.sha != ''
+        # A baseline that predates the Python bindings cannot be measured;
+        # the gate then reports head numbers only.
+        continue-on-error: true
+        run: |
+          git worktree add --detach ../base "${{ steps.base.outputs.sha }}"
+          cmake -S ../base -B ../base/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DRRT_BUILD_PYTHON=ON -DRRT_BUILD_TESTS=OFF -DRRT_BUILD_EXAMPLES=OFF \
+            -DPython_EXECUTABLE="$(which python)"
+          cmake --build ../base/build
+
+      - name: Measure (interleaved A/B, pinned to one core)
+        id: measure
+        run: |
+          set +e
+          # Both workers run one at a time; pinning them to the same core
+          # removes scheduler migration noise on the shared runner.
+          taskset -c 1 python -m bench.perf_ab \
+            --base-path ../base/python --head-path python \
+            --base-label "base ${{ steps.base.outputs.sha }}" \
+            --head-label "head ${{ github.sha }}" \
+            --rounds 5 --out-dir perf
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -eq 3 ]; then
+            echo "::notice::Baseline could not run the perf suite; reporting head only."
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+      - name: Compare
+        if: steps.measure.outputs.status == '0'
+        run: >
+          python -m bench.perf_compare
+          --base perf/base.json --head perf/head.json --report perf/report.md
+          ${{ contains(github.event.pull_request.labels.*.name, 'perf-regression-ok') && '--allow-regression' || '' }}
+
+      - name: Head-only summary
+        if: steps.measure.outputs.status == '3'
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          d = json.load(open("perf/head.json"))
+          print("## Performance (head only, no baseline)\n")
+          print("| Case | µs / iteration | Solved |\n|---|---:|---|")
+          for c in d["cases"]:
+              print(f"| `{c['id']}` | {c['time_per_iter'] * 1e6:.1f} | {c['solved']} |")
+          EOF
+
+      - name: Quality benchmark (quick suite, plots)
+        if: always() && steps.measure.outcome == 'success'
+        run: python -m bench.run --quick --jobs 2 --out bench_results
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ github.sha }}
+          path: |
+            perf/
+            bench_results/
+          if-no-files-found: ignore

@@ -1,11 +1,11 @@
 | Scenario | Planner | Success | First solution (median s) | Final cost / best R² cost (median) | Nodes (median) | Iterations/s |
 |---|---|---:|---:|---:|---:|---:|
-| narrow_passage | RRT* (R²) | 100% | 0.002 | 1.001 | 65,124 | 39,248 |
-| narrow_passage | RRT* Dubins ρ=0.5 | 95% | 0.043 | 1.032 | 7,791 | 5,390 |
-| narrow_passage | RRT* Dubins ρ=1.0 | 70% | 0.194 | 1.040 | 4,874 | 3,865 |
-| cluttered | RRT* (R²) | 100% | 0.001 | 1.001 | 57,315 | 48,679 |
-| cluttered | RRT* Dubins ρ=0.5 | 100% | 0.033 | 1.062 | 6,548 | 7,374 |
-| cluttered | RRT* Dubins ρ=1.0 | 55% | 0.172 | 1.126 | 3,668 | 5,810 |
-| maze | RRT* (R²) | 100% | 0.005 | 1.001 | 62,812 | 42,898 |
-| maze | RRT* Dubins ρ=0.5 | 80% | 0.104 | 1.058 | 7,288 | 7,668 |
-| maze | RRT* Dubins ρ=1.0 | 5% | 0.401 | 1.083 | 22 | 259,915 |
+| narrow_passage | RRT* (R²) | 100% | 0.001 | 1.001 | 73,087 | 43,351 |
+| narrow_passage | RRT* Dubins ρ=0.5 | 100% | 0.014 | 1.032 | 8,522 | 5,735 |
+| narrow_passage | RRT* Dubins ρ=1.0 | 80% | 0.010 | 1.043 | 5,010 | 4,561 |
+| cluttered | RRT* (R²) | 100% | 0.001 | 1.001 | 59,316 | 50,200 |
+| cluttered | RRT* Dubins ρ=0.5 | 100% | 0.006 | 1.061 | 6,650 | 7,570 |
+| cluttered | RRT* Dubins ρ=1.0 | 85% | 0.083 | 1.118 | 3,658 | 6,059 |
+| maze | RRT* (R²) | 100% | 0.005 | 1.001 | 67,342 | 45,340 |
+| maze | RRT* Dubins ρ=0.5 | 100% | 0.025 | 1.060 | 7,534 | 8,115 |
+| maze | RRT* Dubins ρ=1.0 | 5% | 0.397 | 1.083 | 22 | 256,009 |

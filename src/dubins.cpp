@@ -15,12 +15,19 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTwoPi = 2.0 * kPi;
 
+// Normalised lengths below this are numerical noise. sqrt() of a p^2 that
+// should be 0 comes out around 1e-8, and so do angles derived from it.
+// Endpoint error from snapping is at most kDegenerateEps * rho.
+constexpr double kDegenerateEps = 1e-7;
+
 inline double wrap2pi(double a) {
+  double r = a;
   // Common case first: already in range (much cheaper than fmod/floor).
-  if (a >= 0.0 && a < kTwoPi) return a;
-  double r = a - kTwoPi * std::floor(a / kTwoPi);
-  // Rounding can land exactly on 2*pi (or a hair below 0).
-  if (r >= kTwoPi || r < 0.0) r = 0.0;
+  if (r < 0.0 || r >= kTwoPi) r = a - kTwoPi * std::floor(a / kTwoPi);
+  // A segment that should have zero turn often comes out as -1e-16, which
+  // wraps to 2*pi - 1e-16: a spurious full loop that inflates the length
+  // by 2*pi*rho. Snap it to 0.
+  if (r >= kTwoPi - kDegenerateEps || r < 0.0) r = 0.0;
   return r;
 }
 
@@ -48,27 +55,47 @@ Normalised normalise(const Pose& from, const Pose& to, double rho) {
 
 using Params = std::array<double, 3>;
 
+/// p^2 for the straight segment, or nullopt if the word is infeasible.
+/// At tangencies (the target lies on an arc of the path, or where two arcs
+/// meet) p^2 is exactly 0 but rounds to about -1e-15 * d^2; rejecting that
+/// would discard the right word and pick one with a loop instead.
+std::optional<double> straightSq(double p_sq, double d) {
+  if (p_sq >= 0.0) return p_sq;
+  if (p_sq > -1e-10 * (1.0 + d * d)) return 0.0;
+  return std::nullopt;
+}
+
 std::optional<Params> lsl(const Normalised& n) {
   const double tmp0 = n.d + n.sa - n.sb;
   const double p_sq = 2.0 + n.d * n.d - 2.0 * n.c_ab + 2.0 * n.d * (n.sa - n.sb);
-  if (p_sq < 0.0) return std::nullopt;
+  const auto sq = straightSq(p_sq, n.d);
+  if (!sq) return std::nullopt;
+  const double p = std::sqrt(*sq);
+  // With no straight segment its direction atan2(~0, ~0) is noise, and the
+  // two arcs can sum to the turn plus 2*pi. Both arcs lie on the same
+  // circle, so merge them into one.
+  if (p < kDegenerateEps) return Params{wrap2pi(n.beta - n.alpha), 0.0, 0.0};
   const double tmp1 = std::atan2(n.cb - n.ca, tmp0);
-  return Params{wrap2pi(tmp1 - n.alpha), std::sqrt(p_sq), wrap2pi(n.beta - tmp1)};
+  return Params{wrap2pi(tmp1 - n.alpha), p, wrap2pi(n.beta - tmp1)};
 }
 
 std::optional<Params> rsr(const Normalised& n) {
   const double tmp0 = n.d - n.sa + n.sb;
   const double p_sq = 2.0 + n.d * n.d - 2.0 * n.c_ab + 2.0 * n.d * (n.sb - n.sa);
-  if (p_sq < 0.0) return std::nullopt;
+  const auto sq = straightSq(p_sq, n.d);
+  if (!sq) return std::nullopt;
+  const double p = std::sqrt(*sq);
+  if (p < kDegenerateEps) return Params{wrap2pi(n.alpha - n.beta), 0.0, 0.0};
   const double tmp1 = std::atan2(n.ca - n.cb, tmp0);
-  return Params{wrap2pi(n.alpha - tmp1), std::sqrt(p_sq), wrap2pi(tmp1 - n.beta)};
+  return Params{wrap2pi(n.alpha - tmp1), p, wrap2pi(tmp1 - n.beta)};
 }
 
 std::optional<Params> lsr(const Normalised& n) {
   const double p_sq =
       -2.0 + n.d * n.d + 2.0 * n.c_ab + 2.0 * n.d * (n.sa + n.sb);
-  if (p_sq < 0.0) return std::nullopt;
-  const double p = std::sqrt(p_sq);
+  const auto sq = straightSq(p_sq, n.d);
+  if (!sq) return std::nullopt;
+  const double p = std::sqrt(*sq);
   const double tmp =
       std::atan2(-n.ca - n.cb, n.d + n.sa + n.sb) - std::atan2(-2.0, p);
   return Params{wrap2pi(tmp - n.alpha), p, wrap2pi(tmp - n.beta)};
@@ -77,8 +104,9 @@ std::optional<Params> lsr(const Normalised& n) {
 std::optional<Params> rsl(const Normalised& n) {
   const double p_sq =
       -2.0 + n.d * n.d + 2.0 * n.c_ab - 2.0 * n.d * (n.sa + n.sb);
-  if (p_sq < 0.0) return std::nullopt;
-  const double p = std::sqrt(p_sq);
+  const auto sq = straightSq(p_sq, n.d);
+  if (!sq) return std::nullopt;
+  const double p = std::sqrt(*sq);
   const double tmp =
       std::atan2(n.ca + n.cb, n.d - n.sa - n.sb) - std::atan2(2.0, p);
   return Params{wrap2pi(n.alpha - tmp), p, wrap2pi(n.beta - tmp)};

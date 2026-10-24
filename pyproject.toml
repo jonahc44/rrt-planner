@@ -28,3 +28,4 @@ RRT_BUILD_EXAMPLES = "OFF"
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
 pythonpath = ["."]  # so `bench` is importable
+markers = ["slow: runs the real perf suite (deselect with -m 'not slow')"]
