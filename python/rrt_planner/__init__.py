@@ -27,11 +27,20 @@ from ._core import (
     Rng,
     RRTStar,
     RRTStarConfig,
+    SiteType,
     StateSpace,
     StraightLinePath,
+    TerrainCollisionChecker,
+    TerrainCost,
+    TerrainMap,
+    TerrainProperties,
+    TerrainType,
     Termination,
     TruncatedPath,
+    default_terrain_properties,
     dubins,
+    site_name,
+    terrain_name,
 )
 
 __all__ = [name for name in dir() if not name.startswith("_")]

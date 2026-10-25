@@ -38,6 +38,7 @@ add_library(rrt_planner
   src/geometric_world_2d.cpp
   src/occupancy_grid.cpp
   src/costmap_cost.cpp
+  src/terrain.cpp
   src/nearest_neighbors.cpp
   src/rrt_star.cpp)
 add_library(rrt::planner ALIAS rrt_planner)
@@ -96,7 +97,8 @@ if(RRT_BUILD_TESTS)
     tests/test_instrumentation.cpp
     tests/test_nearest_neighbors.cpp
     tests/test_rrt_star.cpp
-    tests/test_steering.cpp)
+    tests/test_steering.cpp
+    tests/test_terrain.cpp)
   target_link_libraries(rrt_tests PRIVATE rrt::planner GTest::gtest_main)
   include(GoogleTest)
   gtest_discover_tests(rrt_tests)

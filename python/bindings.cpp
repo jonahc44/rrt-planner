@@ -11,6 +11,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -24,6 +26,7 @@
 #include "rrt/core/planner.hpp"
 #include "rrt/core/state_space.hpp"
 #include "rrt/cost/costmap_cost.hpp"
+#include "rrt/cost/terrain.hpp"
 #include "rrt/planners/rrt_star.hpp"
 #include "rrt/spaces/dubins.hpp"
 #include "rrt/spaces/dubins_state_space.hpp"
@@ -474,6 +477,144 @@ PYBIND11_MODULE(_core, m) {
       .def(py::init<std::shared_ptr<const OccupancyGrid>, double, double>(),
            py::arg("costmap"), py::arg("weight"),
            py::arg("integration_step") = 0.05);
+
+  // ---- Terrain ------------------------------------------------------------
+  py::native_enum<TerrainType>(m, "TerrainType", "enum.IntEnum",
+                               "Ground surfaces on construction / work sites.")
+      .value("ASPHALT", TerrainType::kAsphalt)
+      .value("CONCRETE_SLAB", TerrainType::kConcreteSlab)
+      .value("STEEL_PLATE", TerrainType::kSteelPlate)
+      .value("COMPACTED_GRAVEL", TerrainType::kCompactedGravel)
+      .value("PACKED_DIRT", TerrainType::kPackedDirt)
+      .value("GRASS", TerrainType::kGrass)
+      .value("LOOSE_GRAVEL", TerrainType::kLooseGravel)
+      .value("CRUSHED_ROCK", TerrainType::kCrushedRock)
+      .value("SAND", TerrainType::kSand)
+      .value("WET_CLAY", TerrainType::kWetClay)
+      .value("RUBBLE", TerrainType::kRubble)
+      .value("MUD", TerrainType::kMud)
+      .value("STANDING_WATER", TerrainType::kStandingWater)
+      .value("EXCAVATION", TerrainType::kExcavation)
+      .value("STOCKPILE", TerrainType::kStockpile)
+      .value("FRESH_CONCRETE", TerrainType::kFreshConcrete)
+      .value("STRUCTURE", TerrainType::kStructure)
+      .finalize();
+
+  py::native_enum<SiteType>(m, "SiteType", "enum.Enum",
+                            "Site layouts known to TerrainMap.random_site.")
+      .value("ROAD_WORKS", SiteType::kRoadWorks)
+      .value("BUILDING", SiteType::kBuilding)
+      .value("DEMOLITION", SiteType::kDemolition)
+      .value("QUARRY", SiteType::kQuarry)
+      .value("PIPELINE", SiteType::kPipeline)
+      .finalize();
+
+  m.def("terrain_name", &terrainName, py::arg("terrain"));
+  m.def("site_name", &siteName, py::arg("site"));
+  m.def("default_terrain_properties", &defaultTerrainProperties,
+        py::arg("terrain"));
+
+  py::classh<TerrainProperties>(m, "TerrainProperties")
+      .def(py::init([](double cost, bool traversable) {
+             return TerrainProperties{cost, traversable};
+           }),
+           py::arg("cost") = 1.0, py::arg("traversable") = true)
+      .def_readwrite("cost", &TerrainProperties::cost)
+      .def_readwrite("traversable", &TerrainProperties::traversable)
+      .def("__repr__", [](const TerrainProperties& p) {
+        return "TerrainProperties(cost=" + std::to_string(p.cost) +
+               ", traversable=" + (p.traversable ? "True" : "False") + ")";
+      });
+
+  py::classh<TerrainMap>(m, "TerrainMap")
+      .def(py::init<std::size_t, std::size_t, double, double, double,
+                    TerrainType>(),
+           py::arg("width"), py::arg("height"), py::arg("resolution"),
+           py::arg("origin_x") = 0.0, py::arg("origin_y") = 0.0,
+           py::arg("fill") = TerrainType::kPackedDirt)
+      .def_static(
+          "from_array",
+          [](py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> a,
+             double resolution, double ox, double oy) {
+            if (a.ndim() != 2) throw std::invalid_argument("expected 2D array");
+            const auto h = static_cast<std::size_t>(a.shape(0));
+            const auto w = static_cast<std::size_t>(a.shape(1));
+            TerrainMap t(w, h, resolution, ox, oy);
+            auto v = a.unchecked<2>();
+            for (std::size_t r = 0; r < h; ++r) {
+              for (std::size_t c = 0; c < w; ++c) {
+                const auto x = v(r, c);
+                if (x < 0 || x >= static_cast<std::int64_t>(kNumTerrainTypes))
+                  throw std::invalid_argument("from_array: bad terrain value");
+                t.set(c, r, static_cast<TerrainType>(x));
+              }
+            }
+            return t;
+          },
+          py::arg("values"), py::arg("resolution"), py::arg("origin_x") = 0.0,
+          py::arg("origin_y") = 0.0,
+          "Build from an (height, width) array of TerrainType values; row 0 "
+          "is the minimum y.")
+      .def_static("random_site", &TerrainMap::randomSite, py::arg("site"),
+                  py::arg("width"), py::arg("height"), py::arg("resolution"),
+                  py::arg("seed"), py::arg("keep_clear") = std::vector<State>{},
+                  py::arg("clear_radius") = 0.5, py::arg("origin_x") = 0.0,
+                  py::arg("origin_y") = 0.0)
+      .def("to_array",
+           [](const TerrainMap& t) {
+             py::array_t<std::uint8_t> out({t.height(), t.width()});
+             auto m = out.mutable_unchecked<2>();
+             for (std::size_t r = 0; r < t.height(); ++r)
+               for (std::size_t c = 0; c < t.width(); ++c)
+                 m(r, c) = static_cast<std::uint8_t>(t.at(c, r));
+             return out;
+           },
+           "(height, width) uint8 array of TerrainType values.")
+      .def("cost_array",
+           [](const TerrainMap& t) {
+             py::array_t<double> out({t.height(), t.width()});
+             auto m = out.mutable_unchecked<2>();
+             for (std::size_t r = 0; r < t.height(); ++r) {
+               for (std::size_t c = 0; c < t.width(); ++c) {
+                 const auto& p = t.properties(t.at(c, r));
+                 m(r, c) = p.traversable ? p.cost
+                                         : std::numeric_limits<double>::infinity();
+               }
+             }
+             return out;
+           },
+           "(height, width) cost per unit length; inf where impassable.")
+      .def("fill_rect", &TerrainMap::fillRect, py::arg("x_min"),
+           py::arg("y_min"), py::arg("x_max"), py::arg("y_max"),
+           py::arg("terrain"))
+      .def("fill_disc", &TerrainMap::fillDisc, py::arg("cx"), py::arg("cy"),
+           py::arg("radius"), py::arg("terrain"))
+      .def("terrain_at", &TerrainMap::terrainAt, py::arg("x"), py::arg("y"))
+      .def("cost_at", &TerrainMap::costAt, py::arg("x"), py::arg("y"),
+           py::arg("outside") = std::numeric_limits<double>::infinity())
+      .def("traversable_at", &TerrainMap::traversableAt, py::arg("x"),
+           py::arg("y"))
+      .def("properties", &TerrainMap::properties, py::arg("terrain"))
+      .def("set_properties", &TerrainMap::setProperties, py::arg("terrain"),
+           py::arg("properties"))
+      .def("occupancy_grid", &TerrainMap::occupancyGrid)
+      .def("normalized_cost_grid", &TerrainMap::normalizedCostGrid)
+      .def_property_readonly("width", &TerrainMap::width)
+      .def_property_readonly("height", &TerrainMap::height)
+      .def_property_readonly("resolution", &TerrainMap::resolution)
+      .def_property_readonly("origin", [](const TerrainMap& t) {
+        return py::make_tuple(t.originX(), t.originY());
+      });
+
+  py::classh<TerrainCost, CostFunction>(m, "TerrainCost")
+      .def(py::init<std::shared_ptr<const TerrainMap>, double, double>(),
+           py::arg("terrain"), py::arg("integration_step") = 0.05,
+           py::arg("blocked_cost") = 1e3);
+
+  py::classh<TerrainCollisionChecker, CollisionChecker>(
+      m, "TerrainCollisionChecker")
+      .def(py::init<std::shared_ptr<const TerrainMap>, double>(),
+           py::arg("terrain"), py::arg("resolution") = 0.05);
 
   // ---- Goal ---------------------------------------------------------------
   py::classh<Goal, PyGoal>(m, "Goal")

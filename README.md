@@ -156,7 +156,8 @@ include/rrt/
     instrumentation.hpp    CountingStateSpace / CountingCollisionChecker (call counters)
   spaces/       RealVector2DSpace, DubinsStateSpace, dubins:: closed-form solver
   collision/    GeometricWorld2D (circles/boxes, disc robot), OccupancyGrid + GridCollisionChecker
-  cost/         CostmapCost (∫ 1 + w·c(x,y) ds over a grid)
+  cost/         CostmapCost (∫ 1 + w·c(x,y) ds over a grid),
+                TerrainMap + TerrainCost + TerrainCollisionChecker (site terrain)
   planners/     RRTStar
 ```
 
@@ -214,6 +215,50 @@ brute force for both spaces.
 
 Workspace checkers and cost maps read position from `state[0], state[1]`.
 Both bundled spaces follow that layout.
+
+### Terrain costs
+
+`TerrainMap` (`include/rrt/cost/terrain.hpp`) is a grid of the surfaces you
+find on construction and work sites. Each surface has a cost per unit length
+relative to asphalt, for a wheeled site vehicle, and a traversable flag:
+
+| Surface | Cost | | Surface | Cost |
+|---|---:|---|---|---:|
+| asphalt, concrete slab | 1.0 | | crushed rock | 2.8 |
+| compacted gravel (haul road) | 1.2 | | sand | 3.0 |
+| steel road plate | 1.3 | | wet clay | 4.0 |
+| packed dirt | 1.5 | | rubble | 4.5 |
+| grass | 1.8 | | mud | 5.0 |
+| loose gravel | 2.2 | | standing water | 6.0 |
+
+Excavations and trenches, stockpiles, fresh concrete pours and structures are
+impassable. `setProperties()` overrides any entry for one map, for example a
+tracked excavator that handles mud better.
+
+- `TerrainCost` integrates the surface cost along each edge, so on all-asphalt
+  ground it equals path length.
+- `TerrainCollisionChecker` rejects impassable cells. You can also export them
+  with `occupancyGrid()` for `GridCollisionChecker`.
+- `normalizedCostGrid()` turns the map into a [0, 1] grid for `CostmapCost`.
+
+`TerrainMap::randomSite(site, w, h, res, seed, keep_clear)` generates a site
+layout, deterministic in `seed` (the same on every compiler):
+
+- **Road works:** a carriageway with milled sections and trenches, some plated over.
+- **Building:** a slab and structure, a pour in progress, a haul road and laydown yard.
+- **Demolition:** a rubble field, standing walls, debris piles and puddles.
+- **Quarry:** pits, benches, stockpiles and haul roads.
+- **Pipeline:** a trench with spoil rows and plated crossings.
+
+Every point within the clear radius of a `keep_clear` point is traversable.
+Connectivity between those points is not guaranteed.
+
+```python
+site = rp.TerrainMap.random_site(rp.SiteType.QUARRY, 100, 100, 0.1, seed=7,
+                                 keep_clear=[[0.5, 0.5], [9.5, 9.5]])
+problem.checker = rp.TerrainCollisionChecker(site)
+problem.cost = rp.TerrainCost(site)
+```
 
 ## RRT\* details
 
@@ -347,6 +392,17 @@ I checked the gate by injecting regressions:
   keeps tree invariants (costs, edge endpoints), never increases cost across
   `solve()` calls, produces collision-free and curvature-bounded Dubins paths,
   and works with a cost-map objective.
+- Terrain (`test_terrain.cpp`, `tests/python/test_terrain.py`), randomised:
+  - `TerrainCost` matches the exact line integral over random terrain grids
+    and is additive along split segments.
+  - Generated sites are deterministic in the seed and contain each site
+    type's characteristic surfaces.
+  - `keep_clear` points stay drivable, and pipeline trenches always have a
+    crossing.
+  - On random sites of every type, RRT\* with `TerrainCost` finds valid
+    paths over cheaper ground than the shortest path.
+  - Random cases derive from a base seed. Set `RRT_TEST_SEED=<n>` to explore
+    other seeds; failures report the seed of the case.
 - Perf tooling (`test_perf.py`): regression, noise, label-override and
   missing-baseline handling in `perf_compare`; a head-vs-head A/B run has
   identical work and cost.
